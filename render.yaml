@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: sentiment-api
+    runtime: python
+    rootDir: STOCK_2
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api_server:app --host 0.0.0.0 --port $PORT
+
+  - type: web
+    name: quant-api
+    runtime: python
+    rootDir: trading-quant-bot-main/trading-quant-bot-main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn stock_quant_project.api_server:app --host 0.0.0.0 --port $PORT

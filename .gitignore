@@ -1,0 +1,17 @@
+# Python / tooling
+venv/
+.venv/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# Secrets / env
+.env
+!.env.example
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+
+# Misc (accidental installs at mono-repo root)
+/package-lock.json

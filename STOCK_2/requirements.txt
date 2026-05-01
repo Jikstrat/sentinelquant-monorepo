@@ -1,0 +1,12 @@
+streamlit>=1.39.0
+pandas
+numpy
+scikit-learn
+transformers
+torch
+yfinance
+feedparser
+joblib
+fastapi
+uvicorn
+requests
