@@ -1,0 +1,12 @@
+streamlit
+streamlit-autorefresh
+pandas
+numpy
+scikit-learn
+transformers
+torch
+yfinance
+feedparser
+joblib
+plotly
+requests
