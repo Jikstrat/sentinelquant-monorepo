@@ -168,7 +168,7 @@ def run_strategies(df: pd.DataFrame, selected_strategies: list) -> pd.DataFrame:
             print(f"  [WARNING] Unknown strategy '{key}' — skipping.")
             continue
         info = strategies_info[key]
-        print(f"  → {info['name']} ...")
+        print(f"  -> {info['name']} ...")
         result = _STRATEGY_MAP[key](result)
         col = _SIGNAL_COLUMNS[key]
         counts = result[col].value_counts().to_dict()
