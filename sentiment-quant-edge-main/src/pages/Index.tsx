@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 
 const SENTIMENT_API_URL = import.meta.env.VITE_SENTIMENT_API_URL ?? "http://localhost:8601";
 const QUANT_API_URL = import.meta.env.VITE_QUANT_API_URL ?? "http://localhost:8602";
+const AUTH_TOKEN_KEY = "sentinelquant_auth_token";
 
 type MarketType = "US" | "INDIA";
 
@@ -60,6 +61,17 @@ type SymbolsResponse = {
   symbols: string[];
 };
 
+type AuthUser = {
+  id: number;
+  name: string;
+  email: string;
+};
+
+type AuthResponse = {
+  token: string;
+  user: AuthUser;
+};
+
 const strategyOptions = [
   { key: "ma", label: "Moving Average", signalColumn: "MA_signal" },
   { key: "rsi", label: "RSI", signalColumn: "RSI_signal" },
@@ -82,6 +94,14 @@ const toTitle = (value: string) =>
     .replace(/\b\w/g, (m) => m.toUpperCase());
 
 const Index = () => {
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem(AUTH_TOKEN_KEY));
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [market, setMarket] = useState<MarketType>("US");
   const [symbols, setSymbols] = useState<string[]>([]);
   const [symbol, setSymbol] = useState("AAPL");
@@ -97,10 +117,43 @@ const Index = () => {
   const plotRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    const fetchMe = async () => {
+      if (!authToken) {
+        setAuthUser(null);
+        return;
+      }
+
+      try {
+        const response = await fetch(`${SENTIMENT_API_URL}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (!response.ok) {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          setAuthToken(null);
+          setAuthUser(null);
+          return;
+        }
+        const data: { user: AuthUser } = await response.json();
+        setAuthUser(data.user);
+      } catch {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        setAuthToken(null);
+        setAuthUser(null);
+      }
+    };
+
+    fetchMe();
+  }, [authToken]);
+
+  useEffect(() => {
+    if (!authUser || !authToken) return;
+
     const fetchSymbols = async () => {
       setIsSymbolsLoading(true);
       try {
-        const response = await fetch(`${SENTIMENT_API_URL}/api/sentiment/symbols?market=${market}`);
+        const response = await fetch(`${SENTIMENT_API_URL}/api/sentiment/symbols?market=${market}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
         const data: SymbolsResponse = await response.json();
         const nextSymbols = Array.isArray(data.symbols) ? data.symbols : [];
         setSymbols(nextSymbols);
@@ -116,15 +169,20 @@ const Index = () => {
     };
 
     fetchSymbols();
-  }, [market]);
+  }, [market, authToken, authUser]);
 
   useEffect(() => {
+    if (!authUser || !authToken) return;
+
     const controller = new AbortController();
     const timeout = setTimeout(async () => {
       try {
         const response = await fetch(
           `${SENTIMENT_API_URL}/api/sentiment/symbol-search?market=${market}&q=${encodeURIComponent(symbolQuery)}`,
-          { signal: controller.signal },
+          {
+            signal: controller.signal,
+            headers: { Authorization: `Bearer ${authToken}` },
+          },
         );
         const data: SymbolsResponse = await response.json();
         setSymbols(Array.isArray(data.symbols) ? data.symbols : []);
@@ -136,7 +194,57 @@ const Index = () => {
       controller.abort();
       clearTimeout(timeout);
     };
-  }, [market, symbolQuery]);
+  }, [market, symbolQuery, authToken, authUser]);
+
+  const handleAuthSubmit = async () => {
+    setAuthError("");
+    setIsAuthLoading(true);
+    try {
+      const endpoint = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+      const payload =
+        authMode === "signup"
+          ? { name: authName.trim(), email: authEmail.trim(), password: authPassword }
+          : { email: authEmail.trim(), password: authPassword };
+
+      const response = await fetch(`${SENTIMENT_API_URL}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = (await response.json()) as AuthResponse | { detail?: string };
+      if (!response.ok || !("token" in data)) {
+        throw new Error((data as { detail?: string }).detail ?? "Authentication failed.");
+      }
+
+      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      setAuthToken(data.token);
+      setAuthUser(data.user);
+      setAuthPassword("");
+      setAuthError("");
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Authentication failed.");
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (authToken) {
+      try {
+        await fetch(`${SENTIMENT_API_URL}/api/auth/logout`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+      } catch {
+        // Ignore logout network errors; local clear is enough.
+      }
+    }
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    setAuthToken(null);
+    setAuthUser(null);
+    setSentimentResult(null);
+    setQuantResult(null);
+  };
 
   const toggleStrategy = (key: string) => {
     setStrategies((prev) => {
@@ -158,7 +266,10 @@ const Index = () => {
       const [sentimentRes, quantRes] = await Promise.all([
         fetch(`${SENTIMENT_API_URL}/api/sentiment/analyze`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
           body: JSON.stringify({ symbol, market }),
         }),
         fetch(`${QUANT_API_URL}/api/quant/analyze`, {
@@ -215,6 +326,92 @@ const Index = () => {
     };
   }, [quantResult, selectedSignalColumn]);
 
+  if (!authUser) {
+    return (
+      <div className="min-h-screen bg-background text-foreground">
+        <main className="container flex min-h-screen items-center justify-center py-10">
+          <section className="w-full max-w-md rounded-2xl border border-border bg-card p-6 md:p-8">
+            <div className="mb-6 flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md border border-primary/30 bg-primary/10">
+                <Activity className="h-4 w-4 text-primary" strokeWidth={2.5} />
+              </div>
+              <span className="text-sm font-semibold tracking-tight">SentinelQuant</span>
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight">{authMode === "signup" ? "Create account" : "Welcome back"}</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {authMode === "signup"
+                ? "Sign up to start running sentiment and quant analysis."
+                : "Log in to access your analysis dashboard."}
+            </p>
+
+            <div className="mt-6 space-y-4">
+              {authMode === "signup" ? (
+                <div>
+                  <label className="text-xs text-muted-foreground">Name</label>
+                  <input
+                    className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                    value={authName}
+                    onChange={(e) => setAuthName(e.target.value)}
+                    placeholder="Your name"
+                  />
+                </div>
+              ) : null}
+
+              <div>
+                <label className="text-xs text-muted-foreground">Email</label>
+                <input
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  type="email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="name@example.com"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-muted-foreground">Password</label>
+                <input
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  type="password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="Minimum 6 characters"
+                />
+              </div>
+
+              {authError ? (
+                <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{authError}</p>
+              ) : null}
+
+              <Button onClick={handleAuthSubmit} className="w-full" disabled={isAuthLoading}>
+                {isAuthLoading ? (
+                  <span className="inline-flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Please wait...
+                  </span>
+                ) : authMode === "signup" ? (
+                  "Sign Up"
+                ) : (
+                  "Log In"
+                )}
+              </Button>
+
+              <button
+                onClick={() => {
+                  setAuthMode((prev) => (prev === "login" ? "signup" : "login"));
+                  setAuthError("");
+                }}
+                className="w-full text-xs text-muted-foreground hover:text-foreground"
+              >
+                {authMode === "signup" ? "Already have an account? Log in" : "Need an account? Sign up"}
+              </button>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-xl">
@@ -225,7 +422,13 @@ const Index = () => {
             </div>
             <span className="text-sm font-semibold tracking-tight">SentinelQuant</span>
           </div>
-          <span className="text-xs uppercase tracking-wide text-muted-foreground">{displayMarket === "INDIA" ? "NIFTY 50" : "US Market"}</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">{authUser.email}</span>
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">{displayMarket === "INDIA" ? "NIFTY 50" : "US Market"}</span>
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              Logout
+            </Button>
+          </div>
         </div>
       </header>
 
